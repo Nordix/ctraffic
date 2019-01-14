@@ -37,6 +37,7 @@ type config struct {
 	srcmax    *int
 	output    *string
 	timeout   *time.Duration
+	mInterval *time.Duration
 	psize     *int
 	rate      *float64
 	reconnect *bool
@@ -53,12 +54,14 @@ func main() {
 	cmd.isServer = flag.Bool("server", false, "Act as server")
 	cmd.ctype = flag.String("client", "echo", "echo|fake")
 	cmd.addr = flag.String("address", "[::1]:5003", "Server address")
-	cmd.src = flag.String("src", "", "Base source address use")
-	cmd.srcmax = flag.Int("srcmax", 100, "Number of connect sources")
+	//cmd.src = flag.String("src", "", "Base source address use")
+	//cmd.srcmax = flag.Int("srcmax", 100, "Number of connect sources")
 	cmd.nconn = flag.Int("nconn", 1, "Number of connections")
 	cmd.version = flag.Bool("version", false, "Print version and quit")
-	cmd.output = flag.String("output", "txt", "Output format; json|txt")
+	//cmd.output = flag.String("output", "txt", "Output format; json|txt")
 	cmd.timeout = flag.Duration("timeout", 10*time.Second, "Timeout")
+	cmd.mInterval = flag.Duration("monitor_interval", time.Duration(0),
+		"Monitor interval")
 	cmd.psize = flag.Int("psize", 1024, "Packet size")
 	cmd.rate = flag.Float64("rate", 10.0, "Rate in KB/second")
 	cmd.reconnect = flag.Bool("reconnect", true, "Re-connect on failures")
@@ -124,12 +127,18 @@ func (c *config) clientMain() int {
 		go c.client(ctx, &wg)
 	}
 
-	go func (deadline time.Time) {
-		for time.Now().Before(deadline) {
-			monitorStats()
-			time.Sleep(time.Second)
-		}
-	}(deadline.Add(-time.Second))
+	if *c.mInterval != time.Duration(0) {
+		go func (deadline time.Time, interval time.Duration) {
+			if interval < time.Second {
+				interval = time.Second
+			}
+			deadline = deadline.Add(-(interval+500*time.Millisecond))
+			for time.Now().Before(deadline) {
+				time.Sleep(interval)
+				monitorStats()
+			}
+		}(deadline, *c.mInterval)
+	}
 
 	wg.Wait()
 
@@ -353,20 +362,6 @@ type stats struct {
 }
 
 func (c *config) reportStats(started time.Time) {
-	var nAct, nFail, nPackets, nDropped, nReceived, nReconnect uint
-	for _, cd := range cData[:nConn] {
-		if cd.err != nil {
-			nFail++
-		} else {
-			nAct++
-		}
-		nPackets += cd.nPacketsSent
-		nDropped += cd.nPacketsDropped
-		nReceived += cd.nPacketsReceived
-		nReconnect += cd.nReconnect
-	}
-	fmt.Printf("Conn N/fail/reconnect: %d/%d/%d, Packets send/rec/dropped: %d/%d/%d\n",
-		nAct, nFail, nReconnect, nPackets, nReceived, nDropped)
 }
 
 func monitorStats() {
