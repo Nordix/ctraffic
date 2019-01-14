@@ -11,7 +11,7 @@ service. Then `ctraffic` is started in client mode to generate traffic
 on a number of connection;
 
 ```
-ctraffic -timeout 1m -address [1000::1]:5003 -rate 1000 -nconn 200 \
+ctraffic -timeout 1m -address [1000::1]:5003 -rate 100 -nconn 200 \
   -monitor_interval 1s
 ```
 
@@ -38,7 +38,7 @@ kubectl apply -f https://github.com/Nordix/ctraffic/raw/master/ctraffic.yaml
 kubectl get svc ctraffic
 # On some external machine;
 externalip=....      # from the printout above
-ctraffic -timeout 1m -address $externalip:5003 -rate 1000 -nconn 200 \
+ctraffic -timeout 1m -address $externalip:5003 -rate 100 -nconn 200 \
   -monitor_interval 1s
 ```
 
