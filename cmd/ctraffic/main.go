@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	tcpinfo "github.com/brucespang/go-tcpinfo"
@@ -103,7 +104,7 @@ type connData struct {
 	tcpinfo          *tcpinfo.TCPInfo
 	started          time.Time
 	connected        time.Time
-	nReconnect       uint
+	nFailedConnect       uint
 }
 
 var cData []connData
@@ -128,22 +129,13 @@ func (c *config) clientMain() int {
 	}
 
 	if *c.mInterval != time.Duration(0) {
-		go func (deadline time.Time, interval time.Duration) {
-			if interval < time.Second {
-				interval = time.Second
-			}
-			deadline = deadline.Add(-(interval+500*time.Millisecond))
-			for time.Now().Before(deadline) {
-				time.Sleep(interval)
-				monitorStats()
-			}
-		}(deadline, *c.mInterval)
+		go monitorStats(deadline, *c.mInterval)
 	}
 
 	wg.Wait()
 
-	monitorStats()
-
+	printConnStats(os.Stderr)
+	c.reportStats(started)
 	return 0
 
 }
@@ -191,7 +183,7 @@ func (c *config) client(ctx context.Context, wg *sync.WaitGroup) {
 			if deadline.Sub(time.Now()) < 2*time.Second {
 				return
 			}
-			cd.nReconnect++
+			cd.nFailedConnect++
 			cd.err = conn.Connect(ctx, *c.addr)
 		}
 		cd.connected = time.Now()
@@ -353,19 +345,57 @@ func server(c net.Conn) {
 // ----------------------------------------------------------------------
 // Statistics
 
-type stats struct {
+type statistics struct {
 	Started     time.Time
-	Ended       time.Time
 	Duration    time.Duration
 	Rate        float64
 	Connections int
+	PacketSize  uint
+	FailedConn  uint
+	Sent        uint
+	Received    uint
+	FailedConnects  uint
+	Dropped     uint
+	SendRate    float64
+	Throughput  float64
 }
 
 func (c *config) reportStats(started time.Time) {
+	var s statistics
+	s.Started = started
+	s.Duration = time.Since(started)
+	s.Rate = *c.rate
+	s.Connections = *c.nconn
+	s.PacketSize = uint(*c.psize)
+	
+	for _, cd := range cData[:nConn] {
+		if cd.err != nil {
+			s.FailedConn++
+		}
+		s.Sent += cd.nPacketsSent
+		s.Dropped += cd.nPacketsDropped
+		s.Received += cd.nPacketsReceived
+		s.FailedConnects += cd.nFailedConnect
+	}
+
+	s.SendRate = float64(s.Sent * s.PacketSize) / float64(s.Duration) * 1000000000.0 / 1024.0
+	s.Throughput = float64(s.Received * s.PacketSize) / float64(s.Duration) * 1000000000.0 / 1024.0
+	json.NewEncoder(os.Stdout).Encode(s)
 }
 
-func monitorStats() {
-	var nAct, nFail, nPackets, nDropped, nReceived, nReconnect uint
+func monitorStats(deadline time.Time, interval time.Duration) {
+	if interval < time.Second {
+		interval = time.Second
+	}
+	deadline = deadline.Add(-(interval+500*time.Millisecond))
+	for time.Now().Before(deadline) {
+		time.Sleep(interval)
+		printConnStats(os.Stderr)
+	}
+}
+
+func printConnStats(out io.Writer) {
+	var nAct, nFail, nPackets, nDropped, nReceived, nFailedConnect uint
 	for _, cd := range cData[:nConn] {
 		if cd.err != nil {
 			nFail++
@@ -375,8 +405,10 @@ func monitorStats() {
 		nPackets += cd.nPacketsSent
 		nDropped += cd.nPacketsDropped
 		nReceived += cd.nPacketsReceived
-		nReconnect += cd.nReconnect
+		nFailedConnect += cd.nFailedConnect
 	}
-	fmt.Printf("Conn N/fail/reconnect: %d/%d/%d, Packets send/rec/dropped: %d/%d/%d\n",
-		nAct, nFail, nReconnect, nPackets, nReceived, nDropped)
+	fmt.Fprintf(
+		out,
+		"Conn N/fail/failedconnect: %d/%d/%d, Packets send/rec/dropped: %d/%d/%d\n",
+		nAct, nFail, nFailedConnect, nPackets, nReceived, nDropped)
 }
