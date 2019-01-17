@@ -174,8 +174,8 @@ func (c *config) client(ctx context.Context, wg *sync.WaitGroup) {
 
 		// Connect with re-try and back-off
 		backoff := 100 * time.Millisecond
-		cd.err = conn.Connect(ctx, *c.addr)
-		for cd.err != nil {
+		err := conn.Connect(ctx, *c.addr)
+		for err != nil {
 			time.Sleep(backoff)
 			if backoff < time.Second {
 				backoff += 100 * time.Millisecond
@@ -184,7 +184,7 @@ func (c *config) client(ctx context.Context, wg *sync.WaitGroup) {
 				return
 			}
 			cd.nFailedConnect++
-			cd.err = conn.Connect(ctx, *c.addr)
+			err = conn.Connect(ctx, *c.addr)
 		}
 		cd.connected = time.Now()
 
@@ -202,7 +202,7 @@ func (c *config) client(ctx context.Context, wg *sync.WaitGroup) {
 func newLimiter(ctx context.Context, r float64, psize int) *rate.Limiter {
 	// Allow some burstiness but drain the bucket from start
 	// Introduce some ramndomness to spread traffic
-	lim := rate.NewLimiter(rate.Limit(r*1024.0), psize * 3)
+	lim := rate.NewLimiter(rate.Limit(r*1024.0), psize * 10)
 	if lim.WaitN(ctx, rand.Intn(psize)) != nil {
 		return nil
 	}
@@ -356,6 +356,7 @@ type statistics struct {
 	Received    uint
 	FailedConnects  uint
 	Dropped     uint
+	Retransmits uint32
 	SendRate    float64
 	Throughput  float64
 }
@@ -376,6 +377,9 @@ func (c *config) reportStats(started time.Time) {
 		s.Dropped += cd.nPacketsDropped
 		s.Received += cd.nPacketsReceived
 		s.FailedConnects += cd.nFailedConnect
+		if cd.tcpinfo != nil {
+			s.Retransmits += cd.tcpinfo.Total_retrans
+		}
 	}
 
 	s.SendRate = float64(s.Sent * s.PacketSize) / float64(s.Duration) * 1000000000.0 / 1024.0
@@ -395,12 +399,16 @@ func monitorStats(deadline time.Time, interval time.Duration) {
 }
 
 func printConnStats(out io.Writer) {
-	var nAct, nFail, nPackets, nDropped, nReceived, nFailedConnect uint
+	var nAct, nFail, nPackets, nDropped, nReceived, nFailedConnect, nConnecting uint
 	for _, cd := range cData[:nConn] {
 		if cd.err != nil {
 			nFail++
 		} else {
-			nAct++
+			if cd.connected.IsZero() {
+				nConnecting++
+			} else {
+				nAct++
+			}
 		}
 		nPackets += cd.nPacketsSent
 		nDropped += cd.nPacketsDropped
@@ -409,6 +417,6 @@ func printConnStats(out io.Writer) {
 	}
 	fmt.Fprintf(
 		out,
-		"Conn N/fail/failedconnect: %d/%d/%d, Packets send/rec/dropped: %d/%d/%d\n",
-		nAct, nFail, nFailedConnect, nPackets, nReceived, nDropped)
+		"Conn act/fail/connecting: %d/%d/%d, Packets send/rec/dropped: %d/%d/%d\n",
+		nAct, nFail, nConnecting, nPackets, nReceived, nDropped)
 }

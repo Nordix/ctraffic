@@ -14,25 +14,26 @@ minute period on 200 connections;
 ```
 > ctraffic -timeout 1m -address [1000::1]:5003 -rate 100 -nconn 200 \
   -monitor_interval 1s | jq .
-Conn N/fail/failedconnect: 200/0/0, Packets send/rec/dropped: 99/99/0
-Conn N/fail/failedconnect: 200/0/0, Packets send/rec/dropped: 197/197/0
-Conn N/fail/failedconnect: 200/0/0, Packets send/rec/dropped: 299/299/0
+Conn act/fail/connecting: 200/0/0, Packets send/rec/dropped: 86/86/0
+Conn act/fail/connecting: 200/0/0, Packets send/rec/dropped: 194/194/0
+Conn act/fail/connecting: 200/0/0, Packets send/rec/dropped: 286/286/0
 ...
-Conn N/fail/failedconnect: 200/0/0, Packets send/rec/dropped: 5917/5917/0
-Conn N/fail/failedconnect: 200/0/0, Packets send/rec/dropped: 5997/5997/0
+Conn act/fail/connecting: 200/0/0, Packets send/rec/dropped: 5898/5898/0
+Conn act/fail/connecting: 200/0/0, Packets send/rec/dropped: 5994/5994/0
 {
-  "Started": "2019-01-16T09:40:04.030614577Z",
-  "Duration": 59996714439,
+  "Started": "2019-01-17T11:46:13.201237638Z",
+  "Duration": 60004976310,
   "Rate": 100,
   "Connections": 200,
   "PacketSize": 1024,
   "FailedConn": 0,
-  "Sent": 5997,
-  "Received": 5997,
+  "Sent": 5994,
+  "Received": 5994,
   "FailedConnects": 0,
   "Dropped": 0,
-  "SendRate": 99.95547349675762,
-  "Throughput": 99.95547349675762
+  "Retransmits": 0,
+  "SendRate": 99.89171513098461,
+  "Throughput": 99.89171513098461
 }
 ```
 
@@ -68,18 +69,19 @@ not interfere with the statistics output;
 > ctraffic ... -monitor_interval 1s | jq .
 ...
 {
-  "Started": "2019-01-16T09:40:04.030614577Z",
-  "Duration": 59996714439,
+  "Started": "2019-01-17T11:46:13.201237638Z",
+  "Duration": 60004976310,
   "Rate": 100,
   "Connections": 200,
   "PacketSize": 1024,
   "FailedConn": 0,
-  "Sent": 5997,
-  "Received": 5997,
+  "Sent": 5994,
+  "Received": 5994,
   "FailedConnects": 0,
   "Dropped": 0,
-  "SendRate": 99.95547349675762,
-  "Throughput": 99.95547349675762
+  "Retransmits": 0,
+  "SendRate": 99.89171513098461,
+  "Throughput": 99.89171513098461
 }
 ```
 
