@@ -32,17 +32,16 @@ Options;
 type config struct {
 	isServer  *bool
 	addr      *string
-	src       *string
 	nconn     *int
 	version   *bool
-	srcmax    *int
-	output    *string
 	timeout   *time.Duration
-	mInterval *time.Duration
+	monitor   *bool
 	psize     *int
 	rate      *float64
 	reconnect *bool
 	ctype     *string
+	stats     *string
+	statsFile *string
 }
 
 func main() {
@@ -53,19 +52,17 @@ func main() {
 
 	var cmd config
 	cmd.isServer = flag.Bool("server", false, "Act as server")
-	cmd.ctype = flag.String("client", "echo", "echo|fake")
+	cmd.ctype = flag.String("client", "echo", "echo")
+	cmd.statsFile = flag.String("analyze", "", "File for post-test analyzing")
 	cmd.addr = flag.String("address", "[::1]:5003", "Server address")
-	//cmd.src = flag.String("src", "", "Base source address use")
-	//cmd.srcmax = flag.Int("srcmax", 100, "Number of connect sources")
 	cmd.nconn = flag.Int("nconn", 1, "Number of connections")
 	cmd.version = flag.Bool("version", false, "Print version and quit")
-	//cmd.output = flag.String("output", "txt", "Output format; json|txt")
 	cmd.timeout = flag.Duration("timeout", 10*time.Second, "Timeout")
-	cmd.mInterval = flag.Duration("monitor_interval", time.Duration(0),
-		"Monitor interval")
+	cmd.monitor = flag.Bool("monitor", false, "Monitor")
 	cmd.psize = flag.Int("psize", 1024, "Packet size")
 	cmd.rate = flag.Float64("rate", 10.0, "Rate in KB/second")
 	cmd.reconnect = flag.Bool("reconnect", true, "Re-connect on failures")
+	cmd.stats = flag.String("stats", "summary", "none|summary|all")
 
 	flag.Parse()
 	if len(os.Args) < 2 {
@@ -78,7 +75,9 @@ func main() {
 		os.Exit(0)
 	}
 
-	if *cmd.isServer {
+	if *cmd.statsFile != "" {
+		os.Exit(cmd.analyzeMain())
+	} else if *cmd.isServer {
 		os.Exit(cmd.serverMain())
 	} else {
 		os.Exit(cmd.clientMain())
@@ -86,25 +85,34 @@ func main() {
 }
 
 // ----------------------------------------------------------------------
+// Analyze
+
+func (c *config) analyzeMain() int {
+	return 0
+}
+
+// ----------------------------------------------------------------------
 // Client
 
 type ctConn interface {
 	Connect(ctx context.Context, address string) error
-	Run(ctx context.Context) error
+	Run(ctx context.Context, s *statistics) error
 }
 
+// TODO: Use the "connstats" struct in the statistics section
 type connData struct {
 	id               uint32
 	psize            int
 	rate             float64
-	nPacketsSent     uint
-	nPacketsReceived uint
-	nPacketsDropped  uint
+	sent     uint32
+	nPacketsReceived uint32
+	nPacketsDropped  uint32
 	err              error
 	tcpinfo          *tcpinfo.TCPInfo
 	started          time.Time
 	connected        time.Time
-	nFailedConnect       uint
+	ended            time.Time
+	nFailedConnect   uint
 }
 
 var cData []connData
@@ -112,8 +120,8 @@ var nConn uint32
 
 func (c *config) clientMain() int {
 
-	started := time.Now()
-	rand.Seed(started.UnixNano())
+	s := newStats(*c.timeout, *c.rate, *c.nconn, uint32(*c.psize))
+	rand.Seed(time.Now().UnixNano())
 
 	// The connection array may contain re-connects
 	cData = make([]connData, *c.nconn*10)
@@ -125,22 +133,44 @@ func (c *config) clientMain() int {
 	var wg sync.WaitGroup
 	wg.Add(*c.nconn)
 	for i := 0; i < *c.nconn; i++ {
-		go c.client(ctx, &wg)
+		go c.client(ctx, &wg, s)
 	}
 
-	if *c.mInterval != time.Duration(0) {
-		go monitorStats(deadline, *c.mInterval)
+	if *c.monitor {
+		go monitor(s)
 	}
 
 	wg.Wait()
 
-	printConnStats(os.Stderr)
-	c.reportStats(started)
-	return 0
+	if *c.stats != "none" {
+		if *c.stats == "all" {
+			s.ConnStats = make([]connstats, nConn)
+			for i := range s.ConnStats {
+				cs := &s.ConnStats[i]
+				cd := &cData[i]
+				cs.Started = cd.started.Sub(s.Started)
+				cs.Duration = cd.ended.Sub(s.Started)
+				if !cd.connected.IsZero() {
+					cs.Connect = cd.connected.Sub(s.Started)
+				}
+				cs.Err = cd.err
+				cs.Sent = cd.sent
+				cs.Received = cd.nPacketsReceived
+				cs.Dropped = cd.nPacketsDropped
+				if cd.tcpinfo != nil {
+					cs.Retransmits = cd.tcpinfo.Total_retrans
+				}
+			}
+		} else {
+			s.Samples = nil
+		}
+		s.reportStats()
+	}
 
+	return 0
 }
 
-func (c *config) client(ctx context.Context, wg *sync.WaitGroup) {
+func (c *config) client(ctx context.Context, wg *sync.WaitGroup, s *statistics) {
 	defer wg.Done()
 
 	for {
@@ -164,8 +194,6 @@ func (c *config) client(ctx context.Context, wg *sync.WaitGroup) {
 
 		var conn ctConn
 		switch *c.ctype {
-		case "fake":
-			conn = newFakeConn(cd)
 		case "echo":
 			conn = newEchoConn(cd)
 		default:
@@ -188,10 +216,13 @@ func (c *config) client(ctx context.Context, wg *sync.WaitGroup) {
 		}
 		cd.connected = time.Now()
 
-		if cd.err = conn.Run(ctx); cd.err == nil {
+		cd.err = conn.Run(ctx, s)
+		cd.ended = time.Now()
+		if cd.err == nil {
 			return // OK return
 		}
 
+		s.failedConnection(1)
 		if !*c.reconnect {
 			break
 		}
@@ -199,65 +230,37 @@ func (c *config) client(ctx context.Context, wg *sync.WaitGroup) {
 
 }
 
+func monitor(s *statistics) {
+	deadline := s.Started.Add(s.Duration - 1500*time.Millisecond)
+	for time.Now().Before(deadline) {
+		time.Sleep(time.Second)
+		var nAct, nConnecting uint
+		for _, cd := range cData[:nConn] {
+			if cd.err == nil {
+				if cd.connected.IsZero() {
+					nConnecting++
+				} else {
+					nAct++
+				}
+			}
+		}
+		fmt.Fprintf(
+			os.Stderr,
+			"Conn act/fail/connecting: %d/%d/%d, Packets send/rec/dropped: %d/%d/%d\n",
+			nAct, s.FailedConnections, nConnecting, s.Sent, s.Received, s.Dropped)
+	}
+}
+
 func newLimiter(ctx context.Context, r float64, psize int) *rate.Limiter {
 	// Allow some burstiness but drain the bucket from start
 	// Introduce some ramndomness to spread traffic
-	lim := rate.NewLimiter(rate.Limit(r*1024.0), psize * 10)
+	lim := rate.NewLimiter(rate.Limit(r*1024.0), psize*10)
 	if lim.WaitN(ctx, rand.Intn(psize)) != nil {
 		return nil
 	}
 	for lim.AllowN(time.Now(), psize) {
 	}
 	return lim
-}
-
-// ----------------------------------------------------------------------
-// Fake Connection
-
-type fakeConn struct {
-	cd *connData
-}
-
-func newFakeConn(cd *connData) ctConn {
-	return &fakeConn{
-		cd: cd,
-	}
-}
-
-func (c *fakeConn) Connect(ctx context.Context, address string) error {
-	return nil
-}
-
-func (c *fakeConn) Run(ctx context.Context) error {
-	
-	lim := newLimiter(ctx, c.cd.rate, c.cd.psize)
-	if lim == nil {
-		return nil
-	}
-
-	for {
-		if lim.WaitN(ctx, c.cd.psize) != nil {
-			break
-		}
-		c.cd.nPacketsSent++
-		fmt.Println("Send", c.cd.id)
-
-		// At 10 KB/S and 4 connections a packet should be sent every
-		// 400 mS.
-		time.Sleep(time.Duration(rand.Intn(440)) * time.Millisecond)
-		c.cd.nPacketsReceived++
-
-		if rand.Intn(100) < 5 {
-			c.cd.err = fmt.Errorf("HUP")
-			return c.cd.err
-		}
-
-		for lim.AllowN(time.Now(), c.cd.psize) {
-			c.cd.nPacketsDropped++
-		}
-
-	}
-	return nil
 }
 
 // ----------------------------------------------------------------------
@@ -280,7 +283,7 @@ func (c *echoConn) Connect(ctx context.Context, address string) error {
 	return err
 }
 
-func (c *echoConn) Run(ctx context.Context) error {
+func (c *echoConn) Run(ctx context.Context, s *statistics) error {
 	defer c.conn.Close()
 
 	lim := newLimiter(ctx, c.cd.rate, c.cd.psize)
@@ -297,10 +300,12 @@ func (c *echoConn) Run(ctx context.Context) error {
 		if _, err := c.conn.Write(p); err != nil {
 			return err
 		}
-		c.cd.nPacketsSent++
+		c.cd.sent++
+		s.sent(1)
 
 		for lim.AllowN(time.Now(), c.cd.psize) {
 			c.cd.nPacketsDropped++
+			s.dropped(1)
 		}
 
 		if err := c.conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
@@ -310,6 +315,7 @@ func (c *echoConn) Run(ctx context.Context) error {
 			return err
 		}
 		c.cd.nPacketsReceived++
+		s.received(1)
 	}
 
 	c.cd.tcpinfo, _ = tcpinfo.GetsockoptTCPInfo(&c.conn)
@@ -346,77 +352,90 @@ func server(c net.Conn) {
 // Statistics
 
 type statistics struct {
-	Started     time.Time
-	Duration    time.Duration
-	Rate        float64
-	Connections int
-	PacketSize  uint
-	FailedConn  uint
-	Sent        uint
-	Received    uint
-	FailedConnects  uint
-	Dropped     uint
-	Retransmits uint32
-	SendRate    float64
-	Throughput  float64
+	Started        time.Time
+	Duration       time.Duration
+	Rate           float64
+	Connections    int
+	PacketSize     uint32
+	FailedConnections     uint32
+	Sent           uint32
+	Received       uint32
+	Dropped        uint32
+	Retransmits    uint32
+	FailedConnects uint
+	ConnStats      []connstats `json:",omitempty"`
+	Samples        []sample `json:",omitempty"`
 }
 
-func (c *config) reportStats(started time.Time) {
-	var s statistics
-	s.Started = started
-	s.Duration = time.Since(started)
-	s.Rate = *c.rate
-	s.Connections = *c.nconn
-	s.PacketSize = uint(*c.psize)
-	
-	for _, cd := range cData[:nConn] {
-		if cd.err != nil {
-			s.FailedConn++
-		}
-		s.Sent += cd.nPacketsSent
-		s.Dropped += cd.nPacketsDropped
-		s.Received += cd.nPacketsReceived
-		s.FailedConnects += cd.nFailedConnect
-		if cd.tcpinfo != nil {
-			s.Retransmits += cd.tcpinfo.Total_retrans
-		}
-	}
 
-	s.SendRate = float64(s.Sent * s.PacketSize) / float64(s.Duration) * 1000000000.0 / 1024.0
-	s.Throughput = float64(s.Received * s.PacketSize) / float64(s.Duration) * 1000000000.0 / 1024.0
+type connstats struct {
+	Started     time.Duration
+	Connect     time.Duration
+	Duration    time.Duration
+	Err         error
+	Sent        uint32
+	Received    uint32
+	Dropped     uint32
+	Retransmits uint32
+}
+
+type sample struct {
+	Time     time.Duration
+	Sent     uint32
+	Received uint32
+	Dropped  uint32
+}
+
+func newStats(
+	duration time.Duration,
+	rate float64,
+	connections int,
+	packetSize uint32) *statistics {
+	
+	s:= &statistics{
+		Started: time.Now(),
+		Duration: duration,
+		Rate: rate,
+		Connections: connections,
+		PacketSize: packetSize,
+		Samples: make([]sample, 0, duration / time.Second),
+	}
+	go s.sample()
+	return s
+}
+
+func (s *statistics) sent(n uint32) {
+	atomic.AddUint32(&s.Sent, n)
+}
+func (s *statistics) received(n uint32) {
+	atomic.AddUint32(&s.Received, n)
+}
+func (s *statistics) dropped(n uint32) {
+	atomic.AddUint32(&s.Dropped, n)
+}
+func (s *statistics) failedConnection(n uint32) {
+	atomic.AddUint32(&s.FailedConnections, n)
+}
+
+func (s *statistics) reportStats() {
+	s.Duration = time.Now().Sub(s.Started)
 	json.NewEncoder(os.Stdout).Encode(s)
 }
 
-func monitorStats(deadline time.Time, interval time.Duration) {
-	if interval < time.Second {
-		interval = time.Second
-	}
-	deadline = deadline.Add(-(interval+500*time.Millisecond))
+func (s *statistics) sample() {
+	deadline := s.Started.Add(s.Duration - 1500*time.Millisecond)
 	for time.Now().Before(deadline) {
-		time.Sleep(interval)
-		printConnStats(os.Stderr)
+		time.Sleep(time.Second)
+		s.Samples = append(
+			s.Samples, sample{time.Now().Sub(s.Started), s.Sent, s.Received, s.Dropped})
 	}
 }
 
-func printConnStats(out io.Writer) {
-	var nAct, nFail, nPackets, nDropped, nReceived, nFailedConnect, nConnecting uint
-	for _, cd := range cData[:nConn] {
-		if cd.err != nil {
-			nFail++
-		} else {
-			if cd.connected.IsZero() {
-				nConnecting++
-			} else {
-				nAct++
-			}
-		}
-		nPackets += cd.nPacketsSent
-		nDropped += cd.nPacketsDropped
-		nReceived += cd.nPacketsReceived
-		nFailedConnect += cd.nFailedConnect
+func readStats(r io.Reader) error {
+	dec := json.NewDecoder(r)
+	var s statistics
+	if err := dec.Decode(&s); err != nil {
+		return err
 	}
-	fmt.Fprintf(
-		out,
-		"Conn act/fail/connecting: %d/%d/%d, Packets send/rec/dropped: %d/%d/%d\n",
-		nAct, nFail, nConnecting, nPackets, nReceived, nDropped)
+	return nil
 }
