@@ -41,7 +41,7 @@ dbg() {
 ##    Print environment.
 ##
 cmd_env() {
-	test "$cmd" = "env" && set | grep -E '^(__.*|ARCHIVE)='
+	test "$cmd" = "env" && set | grep -E '^(__.*)='
 	test -n "$__stats" || __stats=/dev/stdin
 	test -r "$__stats" || die "Not readable [$__stats]"
 	if test -n "$__data"; then
@@ -52,7 +52,7 @@ cmd_env() {
 	which gnuplot > /dev/null || die "Not found in path [gnuplot]"
 }
 
-##  connections [--stats=/dev/stdin] [--data=path]
+##  connections [--stats=/dev/stdin]
 ##
 cmd_connections() {
 	cmd_env
@@ -73,6 +73,29 @@ set border 3
 set xrange [0:]
 set style fill solid 1.0 border -1
 plot '$__data' using (\$1-0.25):2 with boxes, '' using 1:5 with boxes, '' using (\$1+0.25):4 with boxes
+EOF
+	gnuplot -p -c $tmp/script.gp
+}
+
+##  throughput [--stats=/dev/stdin]
+##
+cmd_throughput() {
+	cmd_env
+	mkdir -p $tmp
+	if test -z "$__data"; then
+		__data=$tmp/data
+		ctraffic -stat_file $__stats -analyze throughput > $__data
+	fi
+	cat > $tmp/script.gp <<EOF
+set terminal $__terminal
+set key off
+set ylabel 'KB/S'
+set grid ytics
+set xtics nomirror
+set ytics nomirror
+set border 3
+set xrange [0:]
+plot '$__data' using 1:2 with lines
 EOF
 	gnuplot -p -c $tmp/script.gp
 }

@@ -153,6 +153,9 @@ single packet-loss. If you want to see packet loss as dropped
 packets (and reduced throughput) make sure the packet rate per
 connection is higher than 5 packets/S.
 
+If `--stats=all` is specified additional statistics for connections
+and samples are included. This is necessary for post-test analysis.
+
 
 ## Graphs
 
@@ -164,7 +167,29 @@ scripts/plot.sh connections < /tmp/data.json > /tmp/conn.svg
 
 with the data from the example above produces this graph;
 
-<img src="docs/example-connection.svg" alt="example graph" width="50%" />
+<img src="docs/example-connection.svg" alt="example graph" width="65%" />
+
+Here is another example where packet-loss is introduced for some time
+with;
+
+```
+iptables -A INPUT -i eth1 -m statistic --mode random --probability 0.05 -j DROP
+```
+
+Traffic at 500 KB/S is started towards a k8s cluster and the
+statistics is saved;
+
+```
+ctraffic -timeout 30s -address 10.0.0.2:5003 -nconn 40 -rate 500 -stats=all > /tmp/packet-loss.json
+```
+
+The graph is produced with;
+
+```
+./scripts/plot.sh throughput < /tmp/packet-loss.json > /tmp/packet-loss.svg
+```
+
+<img src="docs/packet-loss.svg" alt="example graph" width="65%" />
 
 
 ## Build
