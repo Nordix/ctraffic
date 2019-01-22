@@ -26,6 +26,12 @@ var version string = "unknown"
 const helptext = `
 Ctraffic setup and maintain and monitors many continuous connections.
 
+Ctraffic has 3 modes;
+
+ 1. Server - simple echo-server
+ 2. Client - traffic generator
+ 3. Analyze - Post-analysis of stored statistics
+
 Options;
 `
 
@@ -42,6 +48,7 @@ type config struct {
 	ctype     *string
 	stats     *string
 	statsFile *string
+	analyze   *string
 }
 
 func main() {
@@ -53,7 +60,7 @@ func main() {
 	var cmd config
 	cmd.isServer = flag.Bool("server", false, "Act as server")
 	cmd.ctype = flag.String("client", "echo", "echo")
-	cmd.statsFile = flag.String("analyze", "", "File for post-test analyzing")
+	cmd.statsFile = flag.String("stat_file", "", "File for post-test analyzing")
 	cmd.addr = flag.String("address", "[::1]:5003", "Server address")
 	cmd.nconn = flag.Int("nconn", 1, "Number of connections")
 	cmd.version = flag.Bool("version", false, "Print version and quit")
@@ -63,7 +70,9 @@ func main() {
 	cmd.rate = flag.Float64("rate", 10.0, "Rate in KB/second")
 	cmd.reconnect = flag.Bool("reconnect", true, "Re-connect on failures")
 	cmd.stats = flag.String("stats", "summary", "none|summary|all")
+	cmd.analyze = flag.String("analyze", "throughput", "Post-test analyze")
 
+	
 	flag.Parse()
 	if len(os.Args) < 2 {
 		flag.Usage()
@@ -88,7 +97,93 @@ func main() {
 // Analyze
 
 func (c *config) analyzeMain() int {
+
+	// Read statistics
+	var err error
+	var s *statistics
+	if *c.statsFile == "-" {
+		s, err = readStats(os.Stdin)
+	} else {
+		if file, e := os.Open(*c.statsFile); e != nil {
+			log.Fatal(e)
+		} else {
+			s, err = readStats(file)
+		}
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	switch *c.analyze {
+	case "throughput":
+		analyzeThroughput(s)
+	case "connections":
+		analyzeConnections(s)
+	default:
+		log.Fatal("Unsupported anayze; ", *c.analyze)
+	}
 	return 0
+}
+
+func analyzeThroughput(s *statistics) {
+	if s.Samples == nil {
+		log.Fatal("No samples found")
+	}
+	fmt.Println("Time Throughput")
+	last := s.Samples[0]
+	for _, samp := range s.Samples[1:] {
+		i := samp.Time - last.Time
+		// The sample-time is the middle of the interval
+		t := last.Time + i/2
+		// Throughput is the received/interval in KB/S
+		reckb := (samp.Received - last.Received) * s.PacketSize / 1024
+		last = samp
+		fmt.Println(t.Seconds(), float64(reckb)/i.Seconds())
+		last = samp
+	}
+}
+
+func analyzeConnections(s *statistics) {
+	fmt.Println("Time Active New Failed Connecting")
+	last := time.Duration(0)
+	for i := time.Second; i < s.Duration; i += time.Second {
+		var act, fail, connecting, new int
+		for _, c := range s.ConnStats {
+			if c.Ended == time.Duration(0) {
+				log.Fatal("A connection has never ended")
+			}
+			if c.Ended < last {
+				continue
+			}
+			if c.Ended < i {
+				// This connection has ended in our interval
+				if c.Err != "" {
+					fail++
+				}
+				continue
+			}
+
+			// The remaining connection ends in the future.
+
+			if c.Started > i {
+				continue		// Not started yet
+			}
+
+			if c.Started > last {
+				new++			// Started in this interval
+			}
+
+			if c.Connect == time.Duration(0) || c.Connect > i {
+				connecting++
+			} else {
+				act++
+			}
+
+		}
+		imid := last + 500*time.Millisecond
+		fmt.Println(imid.Seconds(), act, new, fail, connecting)
+		last = i
+	}
 }
 
 // ----------------------------------------------------------------------
@@ -149,11 +244,13 @@ func (c *config) clientMain() int {
 				cs := &s.ConnStats[i]
 				cd := &cData[i]
 				cs.Started = cd.started.Sub(s.Started)
-				cs.Duration = cd.ended.Sub(s.Started)
+				cs.Ended = cd.ended.Sub(s.Started)
 				if !cd.connected.IsZero() {
 					cs.Connect = cd.connected.Sub(s.Started)
 				}
-				cs.Err = cd.err
+				if cd.err != nil {
+					cs.Err = cd.err.Error()
+				}
 				cs.Sent = cd.sent
 				cs.Received = cd.nPacketsReceived
 				cs.Dropped = cd.nPacketsDropped
@@ -209,6 +306,7 @@ func (c *config) client(ctx context.Context, wg *sync.WaitGroup, s *statistics) 
 				backoff += 100 * time.Millisecond
 			}
 			if deadline.Sub(time.Now()) < 2*time.Second {
+				cd.ended = s.Started.Add(s.Duration)
 				return
 			}
 			cd.nFailedConnect++
@@ -217,10 +315,15 @@ func (c *config) client(ctx context.Context, wg *sync.WaitGroup, s *statistics) 
 		cd.connected = time.Now()
 
 		cd.err = conn.Run(ctx, s)
-		cd.ended = time.Now()
 		if cd.err == nil {
+			// NOTE: The connection *will* stop prematurely if the
+			// next packet can't be sent before the dead-line. However
+			// the stasistics should show that the connection exists
+			// to the test end.
+			cd.ended = s.Started.Add(s.Duration)
 			return // OK return
 		}
+		cd.ended = time.Now()
 
 		s.failedConnection(1)
 		if !*c.reconnect {
@@ -371,8 +474,8 @@ type statistics struct {
 type connstats struct {
 	Started     time.Duration
 	Connect     time.Duration
-	Duration    time.Duration
-	Err         error
+	Ended       time.Duration
+	Err         string
 	Sent        uint32
 	Received    uint32
 	Dropped     uint32
@@ -431,11 +534,11 @@ func (s *statistics) sample() {
 	}
 }
 
-func readStats(r io.Reader) error {
+func readStats(r io.Reader) (*statistics, error) {
 	dec := json.NewDecoder(r)
 	var s statistics
 	if err := dec.Decode(&s); err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return &s, nil
 }
