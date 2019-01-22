@@ -72,7 +72,6 @@ func main() {
 	cmd.stats = flag.String("stats", "summary", "none|summary|all")
 	cmd.analyze = flag.String("analyze", "throughput", "Post-test analyze")
 
-	
 	flag.Parse()
 	if len(os.Args) < 2 {
 		flag.Usage()
@@ -166,11 +165,11 @@ func analyzeConnections(s *statistics) {
 			// The remaining connection ends in the future.
 
 			if c.Started > i {
-				continue		// Not started yet
+				continue // Not started yet
 			}
 
 			if c.Started > last {
-				new++			// Started in this interval
+				new++ // Started in this interval
 			}
 
 			if c.Connect == time.Duration(0) || c.Connect > i {
@@ -199,7 +198,7 @@ type connData struct {
 	id               uint32
 	psize            int
 	rate             float64
-	sent     uint32
+	sent             uint32
 	nPacketsReceived uint32
 	nPacketsDropped  uint32
 	err              error
@@ -455,21 +454,20 @@ func server(c net.Conn) {
 // Statistics
 
 type statistics struct {
-	Started        time.Time
-	Duration       time.Duration
-	Rate           float64
-	Connections    int
-	PacketSize     uint32
-	FailedConnections     uint32
-	Sent           uint32
-	Received       uint32
-	Dropped        uint32
-	Retransmits    uint32
-	FailedConnects uint
-	ConnStats      []connstats `json:",omitempty"`
-	Samples        []sample `json:",omitempty"`
+	Started           time.Time
+	Duration          time.Duration
+	Rate              float64
+	Connections       int
+	PacketSize        uint32
+	FailedConnections uint32
+	Sent              uint32
+	Received          uint32
+	Dropped           uint32
+	Retransmits       uint32
+	FailedConnects    uint
+	ConnStats         []connstats `json:",omitempty"`
+	Samples           []sample    `json:",omitempty"`
 }
-
 
 type connstats struct {
 	Started     time.Duration
@@ -494,14 +492,14 @@ func newStats(
 	rate float64,
 	connections int,
 	packetSize uint32) *statistics {
-	
-	s:= &statistics{
-		Started: time.Now(),
-		Duration: duration,
-		Rate: rate,
+
+	s := &statistics{
+		Started:     time.Now(),
+		Duration:    duration,
+		Rate:        rate,
 		Connections: connections,
-		PacketSize: packetSize,
-		Samples: make([]sample, 0, duration / time.Second),
+		PacketSize:  packetSize,
+		Samples:     make([]sample, 0, duration/time.Second),
 	}
 	go s.sample()
 	return s
