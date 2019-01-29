@@ -72,8 +72,11 @@ set boxwidth 0.5 relative
 set border 3
 set xrange [0:]
 set style fill solid 1.0 border -1
-plot '$__data' using (\$1-0.25):2 with boxes, '' using 1:5 with boxes, '' using (\$1+0.25):4 with boxes
+plot '$__data' using (\$1-0.25):5 with boxes, '' using 1:4 with boxes
 EOF
+	test "$1" = "Active" && \
+		echo "replot '$__data' using (\$1+0.25):2 with boxes" >> $tmp/script.gp
+
 	gnuplot -p -c $tmp/script.gp
 }
 

@@ -34,6 +34,8 @@ Conn act/fail/connecting: 200/0/0, Packets send/rec/dropped: 5908/5908/0
 }
 ```
 
+See also the `xcluster` [mconnect ovl](https://github.com/Nordix/xcluster/tree/master/ovl/ctraffic).
+
 ## Usage
 
 Basic usage;
@@ -162,7 +164,7 @@ and samples are included. This is necessary for post-test analysis.
 The `scripts/plot.sh` script is a utility for creating graphs. Example;
 
 ```
-scripts/plot.sh connections < /tmp/data.json > /tmp/conn.svg
+scripts/plot.sh connections Active < /tmp/data.json > /tmp/conn.svg
 ```
 
 with the data from the example above produces this graph;
