@@ -5,6 +5,10 @@ rolling upgrades and network problems. `Ctraffic` generates continuous
 traffic over a period of time and monitors problems such as lost
 connections, traffic disturbancies and retransmissions.
 
+Even though `ctraffic` is pretty fast it is not a performance
+measurement tool since some bottlenecks are likely in `ctraffic`
+itself.
+
 A ctraffic *server* is started, usually in a cluster behind some load
 balancer for instance a [Kubernetes](https://kubernetes.io/)
 service. Then ctraffic is started in *client* mode to generate traffic
