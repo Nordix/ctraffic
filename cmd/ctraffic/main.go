@@ -262,7 +262,9 @@ func (c *config) clientMain() int {
 			var i uint32
 			for i = 0; i < nConn; i++ {
 				cd := &cData[i]
-				s.Retransmits += cd.tcpinfo.Total_retrans
+				if cd.tcpinfo != nil {
+					s.Retransmits += cd.tcpinfo.Total_retrans
+				}
 			}
 			s.Samples = nil
 		}
