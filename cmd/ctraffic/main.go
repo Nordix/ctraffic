@@ -255,9 +255,15 @@ func (c *config) clientMain() int {
 				cs.Dropped = cd.nPacketsDropped
 				if cd.tcpinfo != nil {
 					cs.Retransmits = cd.tcpinfo.Total_retrans
+					s.Retransmits += cd.tcpinfo.Total_retrans
 				}
 			}
 		} else {
+			var i uint32
+			for i = 0; i < nConn; i++ {
+				cd := &cData[i]
+				s.Retransmits += cd.tcpinfo.Total_retrans
+			}
 			s.Samples = nil
 		}
 		s.reportStats()
