@@ -201,23 +201,15 @@ The graph is produced with;
 ## Build
 
 ```
-go get github.com/brucespang/go-tcpinfo
-go get golang.org/x/time/rate
 go get -u github.com/Nordix/ctraffic
-cd $GOPATH/src/github.com/Nordix/ctraffic
-ver=$(git rev-parse --short HEAD)
-#ver=$(date +%F:%T)
+ver=$(date +%F:%T)
 CGO_ENABLED=0 GOOS=linux go install -a \
   -ldflags "-extldflags '-static' -X main.version=$ver" \
   github.com/Nordix/ctraffic/cmd/ctraffic
 strip $GOPATH/bin/ctraffic
 
 # Build a docker image;
-docker rmi docker.io/nordixorg/ctraffic:$ver
-cd $GOPATH/bin
-tar -cf - ctraffic | docker import \
-  -c 'CMD ["/ctraffic", "-server", "-address", "[::]:5003"]' \
-  - docker.io/nordixorg/ctraffic:$ver
+./build.sh image --image=registry.nordix.org/cloud-native/ctraffic --version=latest
 ```
 
 
