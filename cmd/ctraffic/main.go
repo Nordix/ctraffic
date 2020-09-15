@@ -207,6 +207,8 @@ type connData struct {
 	connected        time.Time
 	ended            time.Time
 	nFailedConnect   uint
+	local            string
+	remote           string
 }
 
 var cData []connData
@@ -257,6 +259,8 @@ func (c *config) clientMain() int {
 					cs.Retransmits = cd.tcpinfo.Total_retrans
 					s.Retransmits += cd.tcpinfo.Total_retrans
 				}
+				cs.Local = cd.local
+				cs.Remote = cd.remote
 			}
 		} else {
 			var i uint32
@@ -395,6 +399,9 @@ func (c *echoConn) Connect(ctx context.Context, address string) error {
 
 func (c *echoConn) Run(ctx context.Context, s *statistics) error {
 	defer c.conn.Close()
+	
+	c.cd.local = c.conn.LocalAddr().String()
+	c.cd.remote = c.conn.RemoteAddr().String()
 
 	lim := newLimiter(ctx, c.cd.rate, c.cd.psize)
 	if lim == nil {
@@ -486,6 +493,8 @@ type connstats struct {
 	Received    uint32
 	Dropped     uint32
 	Retransmits uint32
+	Local       string
+	Remote      string
 }
 
 type sample struct {
