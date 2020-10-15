@@ -5,20 +5,24 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
-	tcpinfo "github.com/brucespang/go-tcpinfo"
-	"golang.org/x/time/rate"
 	"io"
 	"log"
 	"math/rand"
 	"net"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Nordix/mconnect/pkg/rndip"
+	tcpinfo "github.com/brucespang/go-tcpinfo"
+	"golang.org/x/time/rate"
 )
 
 var version string = "unknown"
@@ -49,6 +53,8 @@ type config struct {
 	stats     *string
 	statsFile *string
 	analyze   *string
+	srccidr   *string
+	rndip     *rndip.Rndip
 }
 
 func main() {
@@ -71,6 +77,7 @@ func main() {
 	cmd.reconnect = flag.Bool("reconnect", true, "Re-connect on failures")
 	cmd.stats = flag.String("stats", "summary", "none|summary|all")
 	cmd.analyze = flag.String("analyze", "throughput", "Post-test analyze")
+	cmd.srccidr = flag.String("srccidr", "", "Source CIDR")
 
 	flag.Parse()
 	if len(os.Args) < 2 {
@@ -81,6 +88,11 @@ func main() {
 	if *cmd.version {
 		fmt.Println(version)
 		os.Exit(0)
+	}
+
+	if *cmd.psize < 64 {
+		// Must hold a hostname
+		*cmd.psize = 64
 	}
 
 	if *cmd.statsFile != "" {
@@ -116,8 +128,10 @@ func (c *config) analyzeMain() int {
 	switch *c.analyze {
 	case "throughput":
 		analyzeThroughput(s)
-	case "connections":
+ 	case "connections":
 		analyzeConnections(s)
+ 	case "hosts":
+		analyzeHosts(s)
 	default:
 		log.Fatal("Unsupported anayze; ", *c.analyze)
 	}
@@ -184,6 +198,37 @@ func analyzeConnections(s *statistics) {
 		last = i
 	}
 }
+func analyzeHosts(s *statistics) {
+	lost := make(map[string]int)
+	last := make(map[string]int)
+	var nLost, nLast int
+	for _, c := range s.ConnStats {
+		if c.Host != "" {
+			if c.Err == "" {
+				nLast++
+				last[c.Host]++
+			} else {
+				nLost++
+				lost[c.Host]++
+			}
+		}
+	}
+	fmt.Printf("Lost connections: %d\n", nLost)
+	printKv(lost)
+	fmt.Printf("Lasting connections: %d\n", nLast)
+	printKv(last)
+}
+func printKv(m map[string]int) {
+	keys := make([]string, 0)
+	for k, _ := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		fmt.Printf("  %s %d\n", key, m[key])
+	}
+}
+
 
 // ----------------------------------------------------------------------
 // Client
@@ -209,6 +254,8 @@ type connData struct {
 	nFailedConnect   uint
 	local            string
 	remote           string
+	localAddr        net.Addr
+	host             string
 }
 
 var cData []connData
@@ -225,6 +272,14 @@ func (c *config) clientMain() int {
 	deadline := time.Now().Add(*c.timeout)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
+
+	if *c.srccidr != "" {
+		var err error
+		c.rndip, err = rndip.New(*c.srccidr)
+		if err != nil {
+			log.Fatal("Set source failed:", err)
+		}
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(*c.nconn)
@@ -261,6 +316,7 @@ func (c *config) clientMain() int {
 				}
 				cs.Local = cd.local
 				cs.Remote = cd.remote
+				cs.Host = cd.host
 			}
 		} else {
 			var i uint32
@@ -299,6 +355,14 @@ func (c *config) client(ctx context.Context, wg *sync.WaitGroup, s *statistics) 
 		cd.started = time.Now()
 		cd.psize = *c.psize
 		cd.rate = *c.rate / float64(*c.nconn)
+		if c.rndip != nil {
+			sadr := fmt.Sprintf("%s:0", c.rndip.GetIPString())
+			if saddr, err := net.ResolveTCPAddr("tcp", sadr); err != nil {
+				log.Fatal(err)
+			} else {
+				cd.localAddr = saddr
+			}
+		}
 
 		var conn ctConn
 		switch *c.ctype {
@@ -393,13 +457,18 @@ func newEchoConn(cd *connData) ctConn {
 
 func (c *echoConn) Connect(ctx context.Context, address string) error {
 	var err error
-	c.conn, err = net.DialTimeout("tcp", address, 1500*time.Millisecond)
+
+	d := net.Dialer{
+		LocalAddr: c.cd.localAddr,
+		Timeout:   1500 * time.Millisecond,
+	}
+	c.conn, err = d.DialContext(ctx, "tcp", address)
 	return err
 }
 
 func (c *echoConn) Run(ctx context.Context, s *statistics) error {
 	defer c.conn.Close()
-	
+
 	c.cd.local = c.conn.LocalAddr().String()
 	c.cd.remote = c.conn.RemoteAddr().String()
 
@@ -431,6 +500,13 @@ func (c *echoConn) Run(ctx context.Context, s *statistics) error {
 		if _, err := io.ReadFull(c.conn, p); err != nil {
 			return err
 		}
+		if c.cd.nPacketsReceived == 0 {
+			// First received packet _may_ contain a hostname
+			if n := bytes.IndexByte(p, 0); n > 0 {
+				c.cd.host = string(p[:n])
+			}
+		}
+
 		c.cd.nPacketsReceived++
 		s.received(1)
 	}
@@ -461,8 +537,21 @@ func (c *config) serverMain() int {
 }
 
 func server(c net.Conn) {
+	defer c.Close()
+
+	// Insert our hostname in the first packet
+	p := make([]byte, 64)
+	if _, err := io.ReadFull(c, p); err != nil {
+		return
+	}
+	if host, err := os.Hostname(); err == nil {
+		copy(p[:], host)
+	}
+	if _, err := c.Write(p); err != nil {
+		return
+	}
+
 	io.Copy(c, c)
-	c.Close()
 }
 
 // ----------------------------------------------------------------------
@@ -495,6 +584,7 @@ type connstats struct {
 	Retransmits uint32
 	Local       string
 	Remote      string
+	Host        string `json:",omitempty"`
 }
 
 type sample struct {

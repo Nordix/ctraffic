@@ -62,8 +62,10 @@ ctraffic -timeout 1m -address $externalip:5003 -rate 100 -nconn 200 -monitor
 
 ## Analyze saved data
 
-In automatic testing the statistics is saved for later analysis. In
-the example below a local server is used and is killed around 5
+In automatic testing the statistics is saved for later analysis. The
+-analyze option has 3 options `throughput|connections|hosts`.
+
+In the example below a local server is used and is killed around 5
 seconds after the test is started;
 
 ```
@@ -117,7 +119,26 @@ plot '/tmp/data.data' using ($1-0.25):2 with boxes, '' using 1:5 with boxes, '' 
 The `scripts/plot.sh` script described later can be used for greating graphs
 automatically.
 
+Server hostname data can be analyzed;
 
+```
+$ ctraffic -analyze hosts -stat_file /tmp/scale.out 
+Lost connections: 26
+  vm-001 6
+  vm-002 12
+  vm-004 2
+  vm-005 4
+  vm-010 2
+Lasting connections: 100
+  vm-003 10
+  vm-004 11
+  vm-005 11
+  vm-006 13
+  vm-007 16
+  vm-008 13
+  vm-009 16
+  vm-010 10
+```
 
 ## Statistics
 
