@@ -128,9 +128,9 @@ func (c *config) analyzeMain() int {
 	switch *c.analyze {
 	case "throughput":
 		analyzeThroughput(s)
- 	case "connections":
+	case "connections":
 		analyzeConnections(s)
- 	case "hosts":
+	case "hosts":
 		analyzeHosts(s)
 	default:
 		log.Fatal("Unsupported anayze; ", *c.analyze)
@@ -220,7 +220,7 @@ func analyzeHosts(s *statistics) {
 }
 func printKv(m map[string]int) {
 	keys := make([]string, 0)
-	for k, _ := range m {
+	for k := range m {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
@@ -228,7 +228,6 @@ func printKv(m map[string]int) {
 		fmt.Printf("  %s %d\n", key, m[key])
 	}
 }
-
 
 // ----------------------------------------------------------------------
 // Client
