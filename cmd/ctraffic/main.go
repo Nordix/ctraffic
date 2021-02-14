@@ -20,7 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Nordix/mconnect/pkg/rndip"
+	rndip "github.com/Nordix/mconnect/pkg/rndip/v2"
 	tcpinfo "github.com/brucespang/go-tcpinfo"
 	"golang.org/x/time/rate"
 )
