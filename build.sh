@@ -44,12 +44,17 @@ cmd_env() {
 ##
 cmd_image() {
 	cmd_env
+	cmd_binary
+	docker build -t $__image:$__version .
+}
+
+cmd_binary() {
 	mkdir -p image
+	test -n "$__version" || __version="$(date +%F:%T)"
 	GO111MODULE=on CGO_ENABLED=0 GOOS=linux \
 		go build -ldflags "-extldflags '-static' -X main.version=$__version" \
 		-o image/ctraffic ./cmd/... || die "Complile"
 	strip image/ctraffic
-	docker build -t $__image:$__version .
 }
 
 

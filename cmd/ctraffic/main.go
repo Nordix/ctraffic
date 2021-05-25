@@ -23,6 +23,9 @@ import (
 	rndip "github.com/Nordix/mconnect/pkg/rndip/v2"
 	tcpinfo "github.com/brucespang/go-tcpinfo"
 	"golang.org/x/time/rate"
+
+	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
 var version string = "unknown"
@@ -46,6 +49,7 @@ type config struct {
 	version   *bool
 	timeout   *time.Duration
 	monitor   *bool
+	udp       *bool
 	psize     *int
 	rate      *float64
 	reconnect *bool
@@ -78,6 +82,7 @@ func main() {
 	cmd.stats = flag.String("stats", "summary", "none|summary|all")
 	cmd.analyze = flag.String("analyze", "throughput", "Post-test analyze")
 	cmd.srccidr = flag.String("srccidr", "", "Source CIDR")
+	cmd.udp = flag.Bool("udp", false, "Use UDP")
 
 	flag.Parse()
 	if len(os.Args) < 2 {
@@ -98,8 +103,14 @@ func main() {
 	if *cmd.statsFile != "" {
 		os.Exit(cmd.analyzeMain())
 	} else if *cmd.isServer {
+		if *cmd.udp {
+			os.Exit(cmd.udpServerMain())
+		}
 		os.Exit(cmd.serverMain())
 	} else {
+		if *cmd.udp {
+			os.Exit(cmd.udpClientMain())
+		}
 		os.Exit(cmd.clientMain())
 	}
 }
@@ -293,44 +304,48 @@ func (c *config) clientMain() int {
 	wg.Wait()
 
 	if *c.stats != "none" {
-		if *c.stats == "all" {
-			s.ConnStats = make([]connstats, nConn)
-			for i := range s.ConnStats {
-				cs := &s.ConnStats[i]
-				cd := &cData[i]
-				cs.Started = cd.started.Sub(s.Started)
-				cs.Ended = cd.ended.Sub(s.Started)
-				if !cd.connected.IsZero() {
-					cs.Connect = cd.connected.Sub(s.Started)
-				}
-				if cd.err != nil {
-					cs.Err = cd.err.Error()
-				}
-				cs.Sent = cd.sent
-				cs.Received = cd.nPacketsReceived
-				cs.Dropped = cd.nPacketsDropped
-				if cd.tcpinfo != nil {
-					cs.Retransmits = cd.tcpinfo.Total_retrans
-					s.Retransmits += cd.tcpinfo.Total_retrans
-				}
-				cs.Local = cd.local
-				cs.Remote = cd.remote
-				cs.Host = cd.host
-			}
-		} else {
-			var i uint32
-			for i = 0; i < nConn; i++ {
-				cd := &cData[i]
-				if cd.tcpinfo != nil {
-					s.Retransmits += cd.tcpinfo.Total_retrans
-				}
-			}
-			s.Samples = nil
-		}
+		c.copyStats(s)
 		s.reportStats()
 	}
 
 	return 0
+}
+
+func (c *config) copyStats(s *statistics) {
+	if *c.stats == "all" {
+		s.ConnStats = make([]connstats, nConn)
+		for i := range s.ConnStats {
+			cs := &s.ConnStats[i]
+			cd := &cData[i]
+			cs.Started = cd.started.Sub(s.Started)
+			cs.Ended = cd.ended.Sub(s.Started)
+			if !cd.connected.IsZero() {
+				cs.Connect = cd.connected.Sub(s.Started)
+			}
+			if cd.err != nil {
+				cs.Err = cd.err.Error()
+			}
+			cs.Sent = cd.sent
+			cs.Received = cd.nPacketsReceived
+			cs.Dropped = cd.nPacketsDropped
+			if cd.tcpinfo != nil {
+				cs.Retransmits = cd.tcpinfo.Total_retrans
+				s.Retransmits += cd.tcpinfo.Total_retrans
+			}
+			cs.Local = cd.local
+			cs.Remote = cd.remote
+			cs.Host = cd.host
+		}
+	} else {
+		var i uint32
+		for i = 0; i < nConn; i++ {
+			cd := &cData[i]
+			if cd.tcpinfo != nil {
+				s.Retransmits += cd.tcpinfo.Total_retrans
+			}
+		}
+		s.Samples = nil
+	}
 }
 
 func (c *config) client(ctx context.Context, wg *sync.WaitGroup, s *statistics) {
@@ -645,4 +660,252 @@ func readStats(r io.Reader) (*statistics, error) {
 		return nil, err
 	}
 	return &s, nil
+}
+
+
+// ----------------------------------------------------------------------
+// UDP
+
+
+func (c *config) udpServerMain() int {
+	serverAddr, err := net.ResolveUDPAddr("udp", *c.addr)
+	if err != nil {
+		log.Fatal(err)
+	}	
+	conn, err := net.ListenUDP("udp", serverAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Println("Listen on UDP address; ", *c.addr)
+
+	if err := setUDPSocketOptions(conn); err != nil {
+		log.Fatal(err)
+	}
+
+	buf := make([]byte, 64 * 1024)
+	oob := make([]byte, 2048)
+	for {
+		//n, oobn, flags, addr, err
+		n, oobn, _, addr, err := conn.ReadMsgUDP(buf, oob)
+		if err != nil {
+			log.Fatal(err)
+		}
+		oobd := oob[:oobn]
+
+		n, _, err = conn.WriteMsgUDP(buf[:n], correctSource(oobd), addr)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	return 0;
+}
+
+
+func (c *config) udpClientMain() int {
+	s := newStats(*c.timeout, *c.rate, *c.nconn, uint32(*c.psize))
+	rand.Seed(time.Now().UnixNano())
+
+	// The connection array will not contain re-connects for UDP
+	cData = make([]connData, *c.nconn)
+
+	deadline := time.Now().Add(*c.timeout)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+
+	if *c.srccidr != "" {
+		var err error
+		c.rndip, err = rndip.New(*c.srccidr)
+		if err != nil {
+			log.Fatal("Set source failed:", err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(*c.nconn)
+	for i := 0; i < *c.nconn; i++ {
+		go c.udpClient(ctx, &wg, s)
+	}
+
+	if *c.monitor {
+		go monitor(s)
+	}
+
+	wg.Wait()
+
+	if *c.stats != "none" {
+		c.copyStats(s)
+		s.reportStats()
+	}
+
+	return 0;
+}
+
+type udpConn struct {
+	cd   *connData
+	conn *net.UDPConn
+}
+
+func (c *config) udpClient(
+	ctx context.Context, wg *sync.WaitGroup, s *statistics) {
+	defer wg.Done()
+
+	for {
+
+		// Check that we have > 1sec until deadline
+		deadline, _ := ctx.Deadline()
+		if deadline.Sub(time.Now()) < 1*time.Second {
+			return
+		}
+
+		// Initiate a new connection
+		id := atomic.AddUint32(&nConn, 1) - 1
+		if int(id) >= len(cData) {
+			log.Fatal("Too many re-connects", id)
+		}
+		cd := &cData[id]
+		cd.id = id
+		cd.started = time.Now()
+		cd.psize = *c.psize
+		cd.rate = *c.rate / float64(*c.nconn)
+		var saddr *net.UDPAddr
+		if c.rndip != nil {
+			var err error
+			sadr := fmt.Sprintf("%s:0", c.rndip.GetIPString())
+			if saddr, err = net.ResolveUDPAddr("udp", sadr); err != nil {
+				log.Fatal(err)
+			} else {
+				cd.localAddr = saddr
+			}
+		}
+
+        daddr, err := net.ResolveUDPAddr("udp", *c.addr)
+        if err != nil {
+			log.Fatal(err)
+        }
+
+        conn, err := net.DialUDP("udp", saddr, daddr)
+        if err != nil {
+			log.Fatal(err)
+        }
+        defer conn.Close()
+		cd.connected = time.Now()
+
+		udpConn := udpConn{cd, conn}
+		cd.err = udpConn.Run(ctx, s)
+		if cd.err == nil {
+			// NOTE: The connection *will* stop prematurely if the
+			// next packet can't be sent before the dead-line. However
+			// the stasistics should show that the connection exists
+			// to the test end.
+			cd.ended = s.Started.Add(s.Duration)
+			return // OK return
+		}
+		cd.ended = time.Now()
+	}
+}
+
+func (c *udpConn) Run(ctx context.Context, s *statistics) error {
+	defer c.conn.Close()
+
+	c.cd.local = c.conn.LocalAddr().String()
+	c.cd.remote = c.conn.RemoteAddr().String()
+
+	lim := newLimiter(ctx, c.cd.rate, c.cd.psize)
+	if lim == nil {
+		return nil
+	}
+
+	p := make([]byte, c.cd.psize)
+	for {
+		if lim.WaitN(ctx, c.cd.psize) != nil {
+			break
+		}
+
+		if _, err := c.conn.Write(p); err != nil {
+			return err
+		}
+		c.cd.sent++
+		s.sent(1)
+
+		for lim.AllowN(time.Now(), c.cd.psize) {
+			c.cd.nPacketsDropped++
+			s.dropped(1)
+		}
+
+		if err := c.conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+			return err
+		}
+		_, _, err := c.conn.ReadFrom(p)
+
+		if err != nil {
+			return err
+		}
+
+		if c.cd.nPacketsReceived == 0 {
+			// First received packet _may_ contain a hostname
+			if n := bytes.IndexByte(p, 0); n > 0 {
+				c.cd.host = string(p[:n])
+			}
+		}
+
+		c.cd.nPacketsReceived++
+		s.received(1)
+	}
+	return nil
+}
+
+
+/*
+  Taken from;
+   https://github.com/miekg/dns/blob/master/udp.go
+  License;
+   https://github.com/miekg/dns/blob/master/LICENSE
+ */
+
+func setUDPSocketOptions(conn *net.UDPConn) error {
+	// Try setting the flags for both families and ignore the errors unless they
+	// both error.
+	err6 := ipv6.NewPacketConn(conn).SetControlMessage(ipv6.FlagDst|ipv6.FlagInterface, true)
+	err4 := ipv4.NewPacketConn(conn).SetControlMessage(ipv4.FlagDst|ipv4.FlagInterface, true)
+	if err6 != nil && err4 != nil {
+		return err4
+	}
+	return nil
+}
+
+// parseDstFromOOB takes oob data and returns the destination IP.
+func parseDstFromOOB(oob []byte) net.IP {
+	// Start with IPv6 and then fallback to IPv4
+	// TODO(fastest963): Figure out a way to prefer one or the other. Looking at
+	// the lvl of the header for a 0 or 41 isn't cross-platform.
+	cm6 := new(ipv6.ControlMessage)
+	if cm6.Parse(oob) == nil && cm6.Dst != nil {
+		return cm6.Dst
+	}
+	cm4 := new(ipv4.ControlMessage)
+	if cm4.Parse(oob) == nil && cm4.Dst != nil {
+		return cm4.Dst
+	}
+	return nil
+}
+
+// correctSource takes oob data and returns new oob data with the Src equal to the Dst
+func correctSource(oob []byte) []byte {
+	dst := parseDstFromOOB(oob)
+	if dst == nil {
+		return nil
+	}
+	// If the dst is definitely an IPv6, then use ipv6's ControlMessage to
+	// respond otherwise use ipv4's because ipv6's marshal ignores ipv4
+	// addresses.
+	if dst.To4() == nil {
+		cm := new(ipv6.ControlMessage)
+		cm.Src = dst
+		oob = cm.Marshal()
+	} else {
+		cm := new(ipv4.ControlMessage)
+		cm.Src = dst
+		oob = cm.Marshal()
+	}
+	return oob
 }
