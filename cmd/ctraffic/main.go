@@ -836,9 +836,9 @@ func (c *udpConn) Run(ctx context.Context, s *statistics) error {
 			return err
 		}
 		_, _, err := c.conn.ReadFrom(p)
-
 		if err != nil {
-			return err
+			// Probably a timeout, i.e. a lost packet
+			continue
 		}
 
 		if c.cd.nPacketsReceived == 0 {
