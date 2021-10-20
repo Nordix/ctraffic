@@ -104,7 +104,7 @@ func main() {
 		os.Exit(cmd.analyzeMain())
 	} else if *cmd.isServer {
 		if *cmd.udp {
-			os.Exit(cmd.udpServerMain())
+			go cmd.udpServerMain()
 		}
 		os.Exit(cmd.serverMain())
 	} else {
@@ -538,6 +538,7 @@ func (c *config) serverMain() int {
 		log.Fatal(err)
 	}
 	defer l.Close()
+	log.Println("Listen on address; ", *c.addr)
 
 	for {
 		conn, err := l.Accept()
@@ -682,6 +683,11 @@ func (c *config) udpServerMain() int {
 		log.Fatal(err)
 	}
 
+	host, err := os.Hostname()
+	if err != nil {
+		host = ""
+	}
+
 	buf := make([]byte, 64 * 1024)
 	oob := make([]byte, 2048)
 	for {
@@ -691,6 +697,8 @@ func (c *config) udpServerMain() int {
 			log.Fatal(err)
 		}
 		oobd := oob[:oobn]
+
+		copy(buf[:], host)
 
 		n, _, err = conn.WriteMsgUDP(buf[:n], correctSource(oobd), addr)
 		if err != nil {
