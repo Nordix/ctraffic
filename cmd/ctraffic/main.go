@@ -15,9 +15,11 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"os/signal"
 	"sort"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	rndip "github.com/Nordix/mconnect/pkg/rndip/v2"
@@ -281,6 +283,8 @@ func (c *config) clientMain() int {
 
 	deadline := time.Now().Add(*c.timeout)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	ctx, cancel = signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	if *c.srccidr != "" {
@@ -663,16 +667,14 @@ func readStats(r io.Reader) (*statistics, error) {
 	return &s, nil
 }
 
-
 // ----------------------------------------------------------------------
 // UDP
-
 
 func (c *config) udpServerMain() int {
 	serverAddr, err := net.ResolveUDPAddr("udp", *c.addr)
 	if err != nil {
 		log.Fatal(err)
-	}	
+	}
 	conn, err := net.ListenUDP("udp", serverAddr)
 	if err != nil {
 		log.Fatal(err)
@@ -688,7 +690,7 @@ func (c *config) udpServerMain() int {
 		host = ""
 	}
 
-	buf := make([]byte, 64 * 1024)
+	buf := make([]byte, 64*1024)
 	oob := make([]byte, 2048)
 	for {
 		//n, oobn, flags, addr, err
@@ -705,9 +707,8 @@ func (c *config) udpServerMain() int {
 			log.Fatal(err)
 		}
 	}
-	return 0;
+	return 0
 }
-
 
 func (c *config) udpClientMain() int {
 	s := newStats(*c.timeout, *c.rate, *c.nconn, uint32(*c.psize))
@@ -745,7 +746,7 @@ func (c *config) udpClientMain() int {
 		s.reportStats()
 	}
 
-	return 0;
+	return 0
 }
 
 type udpConn struct {
@@ -786,16 +787,16 @@ func (c *config) udpClient(
 			}
 		}
 
-        daddr, err := net.ResolveUDPAddr("udp", *c.addr)
-        if err != nil {
+		daddr, err := net.ResolveUDPAddr("udp", *c.addr)
+		if err != nil {
 			log.Fatal(err)
-        }
+		}
 
-        conn, err := net.DialUDP("udp", saddr, daddr)
-        if err != nil {
+		conn, err := net.DialUDP("udp", saddr, daddr)
+		if err != nil {
 			log.Fatal(err)
-        }
-        defer conn.Close()
+		}
+		defer conn.Close()
 		cd.connected = time.Now()
 
 		udpConn := udpConn{cd, conn}
@@ -862,13 +863,12 @@ func (c *udpConn) Run(ctx context.Context, s *statistics) error {
 	return nil
 }
 
-
 /*
   Taken from;
    https://github.com/miekg/dns/blob/master/udp.go
   License;
    https://github.com/miekg/dns/blob/master/LICENSE
- */
+*/
 
 func setUDPSocketOptions(conn *net.UDPConn) error {
 	// Try setting the flags for both families and ignore the errors unless they
