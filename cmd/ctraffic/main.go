@@ -263,7 +263,6 @@ type connData struct {
 	started          time.Time
 	connected        time.Time
 	ended            time.Time
-	nFailedConnect   uint
 	local            string
 	remote           string
 	localAddr        net.Addr
@@ -395,6 +394,12 @@ func (c *config) client(ctx context.Context, wg *sync.WaitGroup, s *statistics) 
 		err := conn.Connect(ctx, *c.addr)
 		for err != nil {
 			time.Sleep(backoff)
+			if ctx.Err() != nil {
+				// Interrupt or timeout
+				cd.ended = s.Started.Add(s.Duration)
+				s.failedConnect(1)
+				return
+			}
 			if backoff < time.Second {
 				backoff += 100 * time.Millisecond
 			}
@@ -402,7 +407,7 @@ func (c *config) client(ctx context.Context, wg *sync.WaitGroup, s *statistics) 
 				cd.ended = s.Started.Add(s.Duration)
 				return
 			}
-			cd.nFailedConnect++
+			s.failedConnect(1)
 			err = conn.Connect(ctx, *c.addr)
 		}
 		cd.connected = time.Now()
@@ -587,7 +592,7 @@ type statistics struct {
 	Received          uint32
 	Dropped           uint32
 	Retransmits       uint32
-	FailedConnects    uint
+	FailedConnects    uint32
 	ConnStats         []connstats `json:",omitempty"`
 	Samples           []sample    `json:",omitempty"`
 }
@@ -642,6 +647,9 @@ func (s *statistics) dropped(n uint32) {
 }
 func (s *statistics) failedConnection(n uint32) {
 	atomic.AddUint32(&s.FailedConnections, n)
+}
+func (s *statistics) failedConnect(n uint32) {
+	atomic.AddUint32(&s.FailedConnects, n)
 }
 
 func (s *statistics) reportStats() {

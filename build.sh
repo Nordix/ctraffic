@@ -41,13 +41,14 @@ cmd_env() {
 
 ##  image [--image=name] [--version=latest] [--plugin-tar=file]
 ##    Build the "ctraffic" image.
-##
 cmd_image() {
 	cmd_env
 	cmd_binary
 	docker build -t $__image:$__version .
 }
 
+##  binary
+##    Build the "ctraffic" binary.
 cmd_binary() {
 	mkdir -p image
 	test -n "$__version" || __version="$(date +%F:%T)"
@@ -57,6 +58,7 @@ cmd_binary() {
 	strip image/ctraffic
 }
 
+##
 
 # Get the command
 cmd=$1
