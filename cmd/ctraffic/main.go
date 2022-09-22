@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -44,6 +46,10 @@ Ctraffic has 3 modes;
 Options;
 `
 
+type addressGenerator interface {
+	GetIPString() string
+}
+
 type config struct {
 	isServer  *bool
 	addr      *string
@@ -60,7 +66,8 @@ type config struct {
 	statsFile *string
 	analyze   *string
 	srccidr   *string
-	rndip     *rndip.Rndip
+	srcfile   *string
+	adrgen    addressGenerator
 }
 
 func main() {
@@ -82,9 +89,10 @@ func main() {
 	cmd.rate = flag.Float64("rate", 10.0, "Rate in KB/second")
 	cmd.reconnect = flag.Bool("reconnect", true, "Re-connect on failures")
 	cmd.stats = flag.String("stats", "summary", "none|summary|all")
-	cmd.analyze = flag.String("analyze", "throughput", "Post-test analyze")
+	cmd.analyze = flag.String("analyze", "throughput", "Post-test analyze throughput|hosts|connections")
 	cmd.srccidr = flag.String("srccidr", "", "Source CIDR")
 	cmd.udp = flag.Bool("udp", false, "Use UDP")
+	cmd.srcfile = flag.String("srcfile", "", "Sources from file")
 
 	flag.Parse()
 	if len(os.Args) < 2 {
@@ -115,6 +123,50 @@ func main() {
 		}
 		os.Exit(cmd.clientMain())
 	}
+}
+
+type addrPool struct {
+	addresses []string
+	cursor    int
+}
+
+func readAddresses(path string) *addrPool {
+	// https://golangr.com/read-file/
+	file, err := os.Open(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	return &addrPool{addresses: lines}
+}
+
+func (p *addrPool) GetIPString() string {
+	if p.cursor < len(p.addresses) {
+		adr := p.addresses[p.cursor]
+		p.cursor++
+		return adr
+	}
+	return ""
+}
+
+// Add port ":0" if needed
+func withPort(adr string) string {
+	if strings.ContainsAny(adr, "[]") {
+		if strings.Contains(adr, "]:") {
+			return adr
+		}
+	} else {
+		if strings.ContainsAny(adr, ":") {
+			return adr
+		}
+	}
+	return fmt.Sprintf("%s:0", adr)
 }
 
 // ----------------------------------------------------------------------
@@ -288,10 +340,12 @@ func (c *config) clientMain() int {
 
 	if *c.srccidr != "" {
 		var err error
-		c.rndip, err = rndip.New(*c.srccidr)
+		c.adrgen, err = rndip.New(*c.srccidr)
 		if err != nil {
 			log.Fatal("Set source failed:", err)
 		}
+	} else if *c.srcfile != "" {
+		c.adrgen = readAddresses(*c.srcfile)
 	}
 
 	var wg sync.WaitGroup
@@ -372,8 +426,12 @@ func (c *config) client(ctx context.Context, wg *sync.WaitGroup, s *statistics) 
 		cd.started = time.Now()
 		cd.psize = *c.psize
 		cd.rate = *c.rate / float64(*c.nconn)
-		if c.rndip != nil {
-			sadr := fmt.Sprintf("%s:0", c.rndip.GetIPString())
+		if c.adrgen != nil {
+			a := c.adrgen.GetIPString()
+			if a == "" {
+				log.Fatalln("Ran out of source addresses")
+			}
+			sadr := withPort(a)
 			if saddr, err := net.ResolveTCPAddr("tcp", sadr); err != nil {
 				log.Fatal(err)
 			} else {
@@ -731,10 +789,12 @@ func (c *config) udpClientMain() int {
 
 	if *c.srccidr != "" {
 		var err error
-		c.rndip, err = rndip.New(*c.srccidr)
+		c.adrgen, err = rndip.New(*c.srccidr)
 		if err != nil {
 			log.Fatal("Set source failed:", err)
 		}
+	} else if *c.srcfile != "" {
+		c.adrgen = readAddresses(*c.srcfile)
 	}
 
 	var wg sync.WaitGroup
@@ -785,9 +845,13 @@ func (c *config) udpClient(
 		cd.psize = *c.psize
 		cd.rate = *c.rate / float64(*c.nconn)
 		var saddr *net.UDPAddr
-		if c.rndip != nil {
+		if c.adrgen != nil {
 			var err error
-			sadr := fmt.Sprintf("%s:0", c.rndip.GetIPString())
+			a := c.adrgen.GetIPString()
+			if a == "" {
+				log.Fatalln("Ran out of source addresses")
+			}
+			sadr := withPort(a)
 			if saddr, err = net.ResolveUDPAddr("udp", sadr); err != nil {
 				log.Fatal(err)
 			} else {

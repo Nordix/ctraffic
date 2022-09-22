@@ -38,7 +38,7 @@ Conn act/fail/connecting: 200/0/0, Packets send/rec/dropped: 5908/5908/0
 }
 ```
 
-See also the `xcluster` [mconnect ovl](https://github.com/Nordix/xcluster/tree/master/ovl/ctraffic).
+See also the `xcluster` [ovl/ctraffic](https://github.com/Nordix/xcluster/tree/master/ovl/ctraffic).
 
 ## Usage
 
@@ -59,6 +59,29 @@ kubectl get svc ctraffic
 externalip=....      # from the printout above
 ctraffic -timeout 1m -address $externalip:5003 -rate 100 -nconn 200 -monitor
 ```
+
+## Source addresses
+
+To test may connections from a single source (the default) is many
+times a bad test case. Many source addresses can be specified with the
+`-srccidr` option in the same way as for
+[mconnect](https://github.com/Nordix/mconnect#many-source-addresses).
+
+Another option is to specify the source addresses (optionally
+including ports) in a file and use the `-srcfile` option. An address
+file may look like;
+
+```
+[1000::1:10.200.200.0]:7000
+[1000::1:10.200.200.1]:7000
+[1000::1:10.200.200.2]:7000
+[1000::1:10.200.200.3]:7000
+...
+```
+
+If there is not enough addresses in the file `ctraffic` will terminate
+with "Ran out of source addresses".
+
 
 ## Analyze saved data
 
