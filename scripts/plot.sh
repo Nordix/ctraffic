@@ -98,6 +98,7 @@ set xtics nomirror
 set ytics nomirror
 set border 3
 set xrange [0:]
+set yrange [0:]
 plot '$__data' using 1:2 with lines
 EOF
 	gnuplot -p -c $tmp/script.gp

@@ -139,7 +139,7 @@ set style fill solid 0.5 border -1
 plot '/tmp/data.data' using ($1-0.25):2 with boxes, '' using 1:5 with boxes, '' using ($1+0.25):4 with boxes
 ```
 
-The `scripts/plot.sh` script described later can be used for greating graphs
+The `scripts/plot.sh` script described later can be used for creating graphs
 automatically.
 
 Server hostname data can be analyzed;
