@@ -330,7 +330,7 @@ func (c *config) clientMain() int {
 	rand.Seed(time.Now().UnixNano())
 
 	// The connection array may contain re-connects
-	cData = make([]connData, *c.nconn*10)
+	cData = make([]connData, *c.nconn*100)
 
 	deadline := time.Now().Add(*c.timeout)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
