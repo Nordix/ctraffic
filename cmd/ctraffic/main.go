@@ -360,12 +360,15 @@ func (c *config) clientMain() int {
 
 	wg.Wait()
 
+	c.printStats(s)
+	return 0
+}
+
+func (c *config) printStats(s *statistics) {
 	if *c.stats != "none" {
 		c.copyStats(s)
 		s.reportStats()
 	}
-
-	return 0
 }
 
 func (c *config) copyStats(s *statistics) {
@@ -419,7 +422,8 @@ func (c *config) client(ctx context.Context, wg *sync.WaitGroup, s *statistics) 
 		// Initiate a new connection
 		id := atomic.AddUint32(&nConn, 1) - 1
 		if int(id) >= len(cData) {
-			log.Fatal("Too many re-connects", id)
+			c.printStats(s)
+			log.Fatal("Too many re-connects: ", id)
 		}
 		cd := &cData[id]
 		cd.id = id
