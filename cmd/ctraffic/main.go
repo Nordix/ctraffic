@@ -54,6 +54,7 @@ type config struct {
 	isServer  *bool
 	addr      *string
 	nconn     *int
+	retries   *int
 	version   *bool
 	timeout   *time.Duration
 	monitor   *bool
@@ -82,6 +83,7 @@ func main() {
 	cmd.statsFile = flag.String("stat_file", "", "File for post-test analyzing")
 	cmd.addr = flag.String("address", "[::1]:5003", "Server address")
 	cmd.nconn = flag.Int("nconn", 1, "Number of connections")
+	cmd.retries = flag.Int("retries", 10, "Number of re-connection retries")
 	cmd.version = flag.Bool("version", false, "Print version and quit")
 	cmd.timeout = flag.Duration("timeout", 10*time.Second, "Timeout")
 	cmd.monitor = flag.Bool("monitor", false, "Monitor")
@@ -330,8 +332,7 @@ func (c *config) clientMain() int {
 	rand.Seed(time.Now().UnixNano())
 
 	// The connection array may contain re-connects
-	cData = make([]connData, *c.nconn*10)
-
+	cData = make([]connData, *c.nconn**c.retries)
 	deadline := time.Now().Add(*c.timeout)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
@@ -372,9 +373,10 @@ func (c *config) printStats(s *statistics) {
 }
 
 func (c *config) copyStats(s *statistics) {
+	var i uint32
 	if *c.stats == "all" {
 		s.ConnStats = make([]connstats, nConn)
-		for i := range s.ConnStats {
+		for i = 0; i < nConn && uint32(len(cData)) < i; i++ {
 			cs := &s.ConnStats[i]
 			cd := &cData[i]
 			cs.Started = cd.started.Sub(s.Started)
@@ -397,8 +399,7 @@ func (c *config) copyStats(s *statistics) {
 			cs.Host = cd.host
 		}
 	} else {
-		var i uint32
-		for i = 0; i < nConn; i++ {
+		for i = 0; i < nConn && uint32(len(cData)) < i; i++ {
 			cd := &cData[i]
 			if cd.tcpinfo != nil {
 				s.Retransmits += cd.tcpinfo.Total_retrans
@@ -813,10 +814,7 @@ func (c *config) udpClientMain() int {
 
 	wg.Wait()
 
-	if *c.stats != "none" {
-		c.copyStats(s)
-		s.reportStats()
-	}
+	c.printStats(s)
 
 	return 0
 }
@@ -841,7 +839,8 @@ func (c *config) udpClient(
 		// Initiate a new connection
 		id := atomic.AddUint32(&nConn, 1) - 1
 		if int(id) >= len(cData) {
-			log.Fatal("Too many re-connects", id)
+			c.printStats(s)
+			log.Fatal("Too many re-connects: ", id)
 		}
 		cd := &cData[id]
 		cd.id = id
