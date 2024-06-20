@@ -1,6 +1,6 @@
 // Project page; https://github.com/Nordix/ctraffic/
 // LICENSE; MIT. See the "LICENSE" file in the Project page.
-// Copyright (c) 2019, Nordix Foundation
+// Copyright (C) 2024 OpenInfra Foundation Europe. All rights reserved.
 
 package main
 
@@ -332,7 +332,7 @@ func (c *config) clientMain() int {
 	rand.Seed(time.Now().UnixNano())
 
 	// The connection array may contain re-connects
-	cData = make([]connData, *c.nconn**c.retries)
+	cData = make([]connData, (*c.nconn)*(*c.retries))
 	deadline := time.Now().Add(*c.timeout)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
@@ -373,10 +373,9 @@ func (c *config) printStats(s *statistics) {
 }
 
 func (c *config) copyStats(s *statistics) {
-	var i uint32
 	if *c.stats == "all" {
 		s.ConnStats = make([]connstats, nConn)
-		for i = 0; i < nConn && uint32(len(cData)) < i; i++ {
+		for i := 0; len(cData) > i && len(s.ConnStats) > i; i++ {
 			cs := &s.ConnStats[i]
 			cd := &cData[i]
 			cs.Started = cd.started.Sub(s.Started)
@@ -399,7 +398,8 @@ func (c *config) copyStats(s *statistics) {
 			cs.Host = cd.host
 		}
 	} else {
-		for i = 0; i < nConn && uint32(len(cData)) < i; i++ {
+		var i uint32
+		for i = 0; uint32(len(cData)) > i; i++ {
 			cd := &cData[i]
 			if cd.tcpinfo != nil {
 				s.Retransmits += cd.tcpinfo.Total_retrans
