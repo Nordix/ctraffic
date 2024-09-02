@@ -44,10 +44,10 @@ Ctraffic has 3 modes;
  3. Analyze - Post-analysis of stored statistics
 
 Options;
-`
+ `
 
 type addressGenerator interface {
-	GetIPString() string
+	GetIPStringIdx(cursor uint32) string
 }
 
 type config struct {
@@ -129,7 +129,6 @@ func main() {
 
 type addrPool struct {
 	addresses []string
-	cursor    int
 }
 
 func readAddresses(path string) *addrPool {
@@ -148,10 +147,9 @@ func readAddresses(path string) *addrPool {
 	return &addrPool{addresses: lines}
 }
 
-func (p *addrPool) GetIPString() string {
-	if p.cursor < len(p.addresses) {
-		adr := p.addresses[p.cursor]
-		p.cursor++
+func (p *addrPool) GetIPStringIdx(cursor uint32) string {
+	if int(cursor) < len(p.addresses) {
+		adr := p.addresses[cursor]
 		return adr
 	}
 	return ""
@@ -416,7 +414,7 @@ func (c *config) client(ctx context.Context, wg *sync.WaitGroup, s *statistics) 
 
 		// Check that we have > 2sec until deadline
 		deadline, _ := ctx.Deadline()
-		if deadline.Sub(time.Now()) < 2*time.Second {
+		if time.Until(deadline) < 2*time.Second {
 			return
 		}
 
@@ -432,7 +430,7 @@ func (c *config) client(ctx context.Context, wg *sync.WaitGroup, s *statistics) 
 		cd.psize = *c.psize
 		cd.rate = *c.rate / float64(*c.nconn)
 		if c.adrgen != nil {
-			a := c.adrgen.GetIPString()
+			a := c.adrgen.GetIPStringIdx(id)
 			if a == "" {
 				log.Fatalln("Ran out of source addresses")
 			}
@@ -466,7 +464,7 @@ func (c *config) client(ctx context.Context, wg *sync.WaitGroup, s *statistics) 
 			if backoff < time.Second {
 				backoff += 100 * time.Millisecond
 			}
-			if deadline.Sub(time.Now()) < 2*time.Second {
+			if time.Until(deadline) < 2*time.Second {
 				cd.ended = s.Started.Add(s.Duration)
 				return
 			}
@@ -619,8 +617,6 @@ func (c *config) serverMain() int {
 		}
 		go server(conn)
 	}
-
-	return 0
 }
 
 func server(c net.Conn) {
@@ -716,7 +712,7 @@ func (s *statistics) failedConnect(n uint32) {
 }
 
 func (s *statistics) reportStats() {
-	s.Duration = time.Now().Sub(s.Started)
+	s.Duration = time.Since(s.Started)
 	json.NewEncoder(os.Stdout).Encode(s)
 }
 
@@ -725,7 +721,7 @@ func (s *statistics) sample() {
 	for time.Now().Before(deadline) {
 		time.Sleep(time.Second)
 		s.Samples = append(
-			s.Samples, sample{time.Now().Sub(s.Started), s.Sent, s.Received, s.Dropped})
+			s.Samples, sample{time.Since(s.Started), s.Sent, s.Received, s.Dropped})
 	}
 }
 
@@ -773,12 +769,11 @@ func (c *config) udpServerMain() int {
 
 		copy(buf[:], host)
 
-		n, _, err = conn.WriteMsgUDP(buf[:n], correctSource(oobd), addr)
+		_, _, err = conn.WriteMsgUDP(buf[:n], correctSource(oobd), addr)
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
-	return 0
 }
 
 func (c *config) udpClientMain() int {
@@ -832,7 +827,7 @@ func (c *config) udpClient(
 
 		// Check that we have > 1sec until deadline
 		deadline, _ := ctx.Deadline()
-		if deadline.Sub(time.Now()) < 1*time.Second {
+		if time.Until(deadline) < 1*time.Second {
 			return
 		}
 
@@ -850,7 +845,7 @@ func (c *config) udpClient(
 		var saddr *net.UDPAddr
 		if c.adrgen != nil {
 			var err error
-			a := c.adrgen.GetIPString()
+			a := c.adrgen.GetIPStringIdx(id)
 			if a == "" {
 				log.Fatalln("Ran out of source addresses")
 			}
