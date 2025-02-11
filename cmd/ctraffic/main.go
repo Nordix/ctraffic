@@ -1,6 +1,6 @@
 // Project page; https://github.com/Nordix/ctraffic/
 // LICENSE; MIT. See the "LICENSE" file in the Project page.
-// Copyright (C) 2024 OpenInfra Foundation Europe. All rights reserved.
+// Copyright (C) 2025 OpenInfra Foundation Europe. All rights reserved.
 
 package main
 
@@ -497,7 +497,11 @@ func monitor(s *statistics) {
 	for time.Now().Before(deadline) {
 		time.Sleep(time.Second)
 		var nAct, nConnecting uint
-		for _, cd := range cData[:nConn] {
+		monConns := uint32(len(cData))
+		if monConns > nConn {
+			monConns = nConn
+		}
+		for _, cd := range cData[:monConns] {
 			if cd.err == nil {
 				if cd.connected.IsZero() {
 					nConnecting++
