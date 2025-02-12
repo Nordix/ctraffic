@@ -599,7 +599,7 @@ func (c *echoConn) Run(ctx context.Context, s *statistics) error {
 		s.received(1)
 	}
 
-	c.cd.tcpinfo, _ = tcpinfo.GetsockoptTCPInfo(&c.conn)
+	c.cd.tcpinfo, _ = tcpinfo.GetsockoptTCPInfo(c.conn.(*net.TCPConn))
 	return nil
 }
 

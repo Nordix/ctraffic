@@ -1,12 +1,12 @@
 module github.com/Nordix/ctraffic
 
-go 1.19
+go 1.23
 
 require (
 	github.com/Nordix/mconnect/pkg/rndip/v2 v2.0.0-20240902162515-1be1c6090854
-	github.com/brucespang/go-tcpinfo v0.0.0-20161205163524-e6cc7410d081
-	golang.org/x/net v0.0.0-20210525063256-abc453219eb5
-	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
+	github.com/brucespang/go-tcpinfo v0.2.0
+	golang.org/x/net v0.35.0
+	golang.org/x/time v0.10.0
 )
 
-require golang.org/x/sys v0.0.0-20210423082822-04245dca01da // indirect
+require golang.org/x/sys v0.30.0 // indirect
